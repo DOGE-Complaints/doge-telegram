@@ -14,7 +14,7 @@
 One process starts:
 
 1. **Health HTTP** — `/healthz` (liveness), `/readyz` (fail-closed ready)  
-2. **Poller placeholder** — idle loop until STORY-02 maps `getUpdates` → bridge
+2. **Long-poll turns loop** — `getUpdates` → `POST /v1/channel/turns` → minimal SendMessage apply (STORY-02). No webhook ingress in v1. Callbacks/outbox hardening = STORY-03.
 
 ## Env
 
