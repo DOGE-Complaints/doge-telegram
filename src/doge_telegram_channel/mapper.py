@@ -1,7 +1,6 @@
-"""Map Telegram message updates → ChannelTurnRequest (OpenAPI fields only).
+"""Map Telegram updates → ChannelTurnRequest / ChannelActionRequest (OpenAPI only).
 
 SSOT: ``doge-ai-bridge/docs/openapi/aibridge-channel-v1.openapi.yaml``
-schemas ChannelTurnRequest / ChannelPrincipal / ChannelMessage.
 """
 
 from __future__ import annotations
@@ -10,20 +9,20 @@ from typing import Any
 
 
 class MappingSkip(Exception):
-    """Update is not an ordinary text message for the turns path."""
+    """Update is out of scope for turns/actions mapping."""
 
 
-# OpenAPI ChannelTurnRequest.properties — do not invent keys beyond these.
+# OpenAPI ChannelTurnRequest / ChannelActionRequest — do not invent keys.
 _TURN_KEYS = frozenset({"channel", "event_id", "principal", "message"})
+_ACTION_KEYS = frozenset(
+    {"channel", "event_id", "callback_query_id", "principal", "action_token"}
+)
 _PRINCIPAL_KEYS = frozenset({"user_id", "chat_id"})
 _MESSAGE_KEYS = frozenset({"message_id", "text", "language_code"})
 
 
 def map_message_update_to_turn(update: dict[str, Any]) -> dict[str, Any]:
-    """Build ChannelTurnRequest from a Telegram ``message`` update.
-
-    Skips callback_query and non-text messages (STORY-03 owns callbacks).
-    """
+    """Build ChannelTurnRequest from a Telegram ``message`` update."""
     if "callback_query" in update:
         raise MappingSkip("callback_query")
     message = update.get("message")
@@ -65,11 +64,58 @@ def map_message_update_to_turn(update: dict[str, Any]) -> dict[str, Any]:
         "principal": principal,
         "message": msg,
     }
-    _assert_openapi_shape(envelope)
+    _assert_turn_shape(envelope)
     return envelope
 
 
-def _assert_openapi_shape(envelope: dict[str, Any]) -> None:
+def map_callback_update_to_action(update: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+    """Build ChannelActionRequest from ``callback_query``.
+
+    Returns ``(envelope, edit_message_id)`` where edit_message_id comes from the
+    callback's message (Bot API) for Edit path — not an OpenAPI request field.
+    """
+    cq = update.get("callback_query")
+    if not isinstance(cq, dict):
+        raise MappingSkip("no_callback_query")
+    update_id = update.get("update_id")
+    if update_id is None:
+        raise MappingSkip("no_update_id")
+    cq_id = cq.get("id")
+    if cq_id is None:
+        raise MappingSkip("no_callback_query_id")
+    data = cq.get("data")
+    if not isinstance(data, str) or not data:
+        raise MappingSkip("no_action_token")
+    from_user = cq.get("from")
+    if not isinstance(from_user, dict) or from_user.get("id") is None:
+        raise MappingSkip("no_user_id")
+    message = cq.get("message")
+    chat_id: str | None = None
+    edit_message_id: str | None = None
+    if isinstance(message, dict):
+        chat = message.get("chat")
+        if isinstance(chat, dict) and chat.get("id") is not None:
+            chat_id = str(chat["id"])
+        if message.get("message_id") is not None:
+            edit_message_id = str(message["message_id"])
+    if chat_id is None:
+        raise MappingSkip("no_chat_id")
+
+    envelope: dict[str, Any] = {
+        "channel": "telegram",
+        "event_id": str(update_id),
+        "callback_query_id": str(cq_id),
+        "principal": {
+            "user_id": str(from_user["id"]),
+            "chat_id": chat_id,
+        },
+        "action_token": data[:64],
+    }
+    _assert_action_shape(envelope)
+    return envelope, edit_message_id
+
+
+def _assert_turn_shape(envelope: dict[str, Any]) -> None:
     extra = set(envelope) - _TURN_KEYS
     if extra:
         raise ValueError(f"invented_turn_fields:{sorted(extra)}")
@@ -79,5 +125,15 @@ def _assert_openapi_shape(envelope: dict[str, Any]) -> None:
         raise ValueError("invented_principal_fields")
     if set(message) - _MESSAGE_KEYS:
         raise ValueError("invented_message_fields")
+    if envelope["channel"] != "telegram":
+        raise ValueError("channel_must_be_telegram")
+
+
+def _assert_action_shape(envelope: dict[str, Any]) -> None:
+    extra = set(envelope) - _ACTION_KEYS
+    if extra:
+        raise ValueError(f"invented_action_fields:{sorted(extra)}")
+    if set(envelope["principal"]) - _PRINCIPAL_KEYS:
+        raise ValueError("invented_principal_fields")
     if envelope["channel"] != "telegram":
         raise ValueError("channel_must_be_telegram")

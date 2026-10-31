@@ -67,7 +67,8 @@ def telegram_request(
         logger.error("ops_telegram_api_not_ok method=%s", method)
         raise TelegramApiError(method=method, status=None, detail="api_not_ok")
     result = data.get("result")
-    if not isinstance(result, (dict, list)):
+    # Bot API: getUpdates → list; send/edit → Message object; answerCallbackQuery → true.
+    if not isinstance(result, (dict, list, bool)):
         raise TelegramApiError(method=method, status=None, detail="bad_result_type")
     return data
 
@@ -79,10 +80,14 @@ def get_updates(
     timeout: int = 25,
     allowed_updates: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Long-poll getUpdates. Default allowed_updates = message only (STORY-02)."""
+    """Long-poll getUpdates. Default: message + callback_query (STORY-02/03)."""
     payload: dict[str, Any] = {
         "timeout": timeout,
-        "allowed_updates": allowed_updates if allowed_updates is not None else ["message"],
+        "allowed_updates": (
+            allowed_updates
+            if allowed_updates is not None
+            else ["message", "callback_query"]
+        ),
     }
     if offset is not None:
         payload["offset"] = offset
@@ -113,3 +118,48 @@ def send_message(
     result = data["result"]
     assert isinstance(result, dict)
     return result
+
+
+def answer_callback_query(
+    *,
+    token: str,
+    callback_query_id: str,
+    text: str | None = None,
+) -> dict[str, Any]:
+    """Acknowledge callback promptly (neutral/empty text per peer OpenAPI note)."""
+    payload: dict[str, Any] = {"callback_query_id": callback_query_id}
+    if text:
+        payload["text"] = text
+    data = telegram_request(
+        token=token, method="answerCallbackQuery", payload=payload, timeout=15.0
+    )
+    result = data["result"]
+    # Bot API may return true
+    if isinstance(result, dict):
+        return result
+    return {"ok": True}
+
+
+def edit_message_text(
+    *,
+    token: str,
+    chat_id: str,
+    message_id: str,
+    text: str,
+    reply_markup: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Edit message text (+ optional inline keyboard) from bridge reply_text."""
+    payload: dict[str, Any] = {
+        "chat_id": chat_id,
+        "message_id": int(message_id) if message_id.isdigit() else message_id,
+        "text": text,
+    }
+    if reply_markup is not None:
+        payload["reply_markup"] = reply_markup
+    data = telegram_request(
+        token=token, method="editMessageText", payload=payload, timeout=30.0
+    )
+    result = data["result"]
+    if isinstance(result, dict):
+        return result
+    return {"ok": True}
