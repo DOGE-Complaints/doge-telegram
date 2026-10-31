@@ -19,7 +19,7 @@
 
 **Event key (logical):** Telegram `update_id` (and type discrimination if required by mapping). Exact persistence schema = create/implement wave.
 
-**Defense in depth:** bridge channel idempotency may still apply (`doge-ai-bridge` tests exist) — second belt, not replacement for transport store.
+**Defense in depth:** bridge channel idempotency may still apply (`doge-ai-bridge/tests/integration/test_idempotency_concurrency.py`) — **second belt only**, **not** a substitute for transport Volume `seen_events` / AC-TG-01-04.
 
 ---
 
