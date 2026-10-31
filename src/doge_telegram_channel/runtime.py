@@ -1,4 +1,4 @@
-"""Canonical production entry: poller placeholder + minimal health HTTP.
+"""Canonical production entry: long-poll turns loop + minimal health HTTP.
 
 Packaging SSOT: `python -m doge_telegram_channel` or console script
 `doge-telegram-channel` → :func:`main`.
@@ -16,7 +16,7 @@ from pathlib import Path
 
 from doge_telegram_channel.config import ConfigError, Settings, load_settings, readiness_reasons
 from doge_telegram_channel.health import start_health_server
-from doge_telegram_channel.poller import PollerPlaceholder
+from doge_telegram_channel.poller import IdlePoller, LongPollTurnsLoop
 
 logger = logging.getLogger("doge_telegram_channel")
 
@@ -102,12 +102,18 @@ def main(
         port=args.health_port,
         settings_provider=provider,
     )
-    poller = PollerPlaceholder()
+    if settings is not None:
+        poller = LongPollTurnsLoop(settings=settings)
+        poller_kind = "longpoll_turns"
+    else:
+        poller = IdlePoller()
+        poller_kind = "idle"
     poller.start()
     logger.info(
-        "production_entry_started health=http://%s:%s/healthz poller=placeholder",
+        "production_entry_started health=http://%s:%s/healthz poller=%s",
         args.health_host,
         args.health_port,
+        poller_kind,
     )
 
     stop = False
