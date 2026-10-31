@@ -1,0 +1,9 @@
+schema_version: 1
+package_sequence: 0
+created_at: "2026-10-31T18:08:59Z"
+label: bootstrap
+input_kind: task_list_linear
+tasks_root: doge-telegram/docs/tasks/
+linear_paths:
+  - doge-telegram/docs/tasks/telegram-active-packages/task-telegram-boot-t00-profile-ssot/README.md
+activation: active
