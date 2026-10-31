@@ -1,6 +1,7 @@
-"""SQLite Volume store — outbox home (idempotency store = STORY-04).
+"""SQLite Volume store — outbox + seen-event idempotency (same Volume).
 
 Logical outbox states: pending → sending → sent | failed.
+Seen-event key: Telegram ``update_id`` + kind (message|callback).
 """
 
 from __future__ import annotations
@@ -51,6 +52,16 @@ class SqliteStore:
                 payload TEXT NOT NULL,
                 last_error TEXT,
                 updated_at REAL NOT NULL
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS seen_events (
+                update_id INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                seen_at REAL NOT NULL,
+                PRIMARY KEY (update_id, kind)
             )
             """
         )
@@ -146,6 +157,24 @@ class SqliteStore:
         )
         self.conn.commit()
         logger.error("ops_outbox_failed id=%s error=%s", job_id, error[:200])
+
+    def has_seen(self, *, update_id: int, kind: str) -> bool:
+        row = self.conn.execute(
+            "SELECT 1 FROM seen_events WHERE update_id = ? AND kind = ?",
+            (update_id, kind),
+        ).fetchone()
+        return row is not None
+
+    def mark_seen(self, *, update_id: int, kind: str) -> None:
+        self.conn.execute(
+            """
+            INSERT OR IGNORE INTO seen_events (update_id, kind, seen_at)
+            VALUES (?, ?, ?)
+            """,
+            (update_id, kind, time.time()),
+        )
+        self.conn.commit()
+        logger.info("ops_seen_event update_id=%s kind=%s", update_id, kind)
 
     def get_job(self, job_id: int) -> OutboxJob | None:
         row = self.conn.execute(

@@ -7,6 +7,7 @@ import threading
 from typing import Callable, Protocol
 
 from doge_telegram_channel.bridge_client import BridgeClientError, BridgeTurnsClient
+from doge_telegram_channel.bridge_stub import make_bridge_client
 from doge_telegram_channel.config import Settings
 from doge_telegram_channel.delivery import drain_outbox, payload_from_bridge_response
 from doge_telegram_channel.mapper import (
@@ -21,6 +22,9 @@ from doge_telegram_channel.telegram_api import (
     answer_callback_query,
     get_updates,
 )
+
+KIND_MESSAGE = "message"
+KIND_CALLBACK = "callback"
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +70,7 @@ class LongPollTurnsLoop:
     ) -> None:
         self._settings = settings
         self._poll_timeout = poll_timeout
-        self._bridge = bridge_client or BridgeTurnsClient(
+        self._bridge = bridge_client or make_bridge_client(
             base_url=settings.bridge_base_url,
             channel_bearer=settings.channel_bearer,
         )
@@ -131,6 +135,13 @@ class LongPollTurnsLoop:
         if "callback_query" in update:
             return self._process_callback(update, _advance_offset)
 
+        if isinstance(update_id, int) and self._store.has_seen(
+            update_id=update_id, kind=KIND_MESSAGE
+        ):
+            logger.info("ops_dedup_skip update_id=%s kind=%s", update_id, KIND_MESSAGE)
+            _advance_offset()
+            return False
+
         try:
             envelope = map_message_update_to_turn(update)
         except MappingSkip as skip:
@@ -150,6 +161,9 @@ class LongPollTurnsLoop:
                 exc.detail,
             )
             return False
+        # Mark seen after successful turns so outbound failure cannot double-apply turns.
+        if isinstance(update_id, int):
+            self._store.mark_seen(update_id=update_id, kind=KIND_MESSAGE)
         chat_id = envelope["principal"]["chat_id"]
         try:
             self._apply(
@@ -164,6 +178,8 @@ class LongPollTurnsLoop:
                 exc.method,
                 exc.detail,
             )
+            # Seen already — advance so Telegram does not re-POST turns.
+            _advance_offset()
             return False
         _advance_offset()
         logger.info(
@@ -175,6 +191,14 @@ class LongPollTurnsLoop:
 
     def _process_callback(self, update: dict, advance: Callable[[], None]) -> bool:
         """Ack promptly → POST /v1/channel/actions → persist outbox → drain."""
+        update_id = update.get("update_id")
+        if isinstance(update_id, int) and self._store.has_seen(
+            update_id=update_id, kind=KIND_CALLBACK
+        ):
+            logger.info("ops_dedup_skip update_id=%s kind=%s", update_id, KIND_CALLBACK)
+            advance()
+            return False
+
         try:
             envelope, edit_message_id = map_callback_update_to_action(update)
         except MappingSkip as skip:
@@ -218,6 +242,8 @@ class LongPollTurnsLoop:
             edit_message_id=edit_message_id,
         )
         if payload is None:
+            if isinstance(update_id, int):
+                self._store.mark_seen(update_id=update_id, kind=KIND_CALLBACK)
             advance()
             return True
 
@@ -226,6 +252,8 @@ class LongPollTurnsLoop:
             self._drain(store=self._store, token=self._settings.telegram_bot_token)
         except Exception:
             logger.exception("ops_outbox_drain_after_enqueue id=%s", job_id)
+        if isinstance(update_id, int):
+            self._store.mark_seen(update_id=update_id, kind=KIND_CALLBACK)
         advance()
         logger.info(
             "ops_action_ok event_id=%s chat_id=%s outbox_id=%s",
